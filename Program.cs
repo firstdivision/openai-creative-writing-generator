@@ -2,8 +2,12 @@
 using OpenAI;
 using OpenAI.Chat;
 using System.Text.Json;
+using CsvHelper;
+using System.Globalization;
+using CsvHelper.Configuration;
 
 #pragma warning disable OPENAI001 // Ignore OpenAI experimental features warnings
+
 
 var modelName = Environment.GetEnvironmentVariable("OPEN_AI_MODEL");
 var baseUrl = Environment.GetEnvironmentVariable("OPEN_AI_HOST");
@@ -35,7 +39,7 @@ Hard rules:
 - Vary genre, time period, and narrative angle across outputs.
 
 Output format:
-- A single JSON object with one key: "prompt".
+- Return valid JSON ONLY, with exactly: {"prompt":"..."}.
 - Do not include any other keys, commentary, or markdown.
 - If the user message includes “Entropy:” or “Ingredients:”, NEVER repeat those words or the raw ingredient list.
 """;
@@ -101,12 +105,17 @@ static string? TryExtractPromptFromJson(string content)
             doc.RootElement.TryGetProperty("prompt", out var p) &&
             p.ValueKind == JsonValueKind.String)
         {
-            return p.GetString()?.Trim();
+            var output = p.GetString()?.Trim();
+            return output;
         }
-    }
-    catch { /* ignore */ }
 
-    return null;
+        // Not the expected format
+        return null;
+    }
+    catch { 
+        Console.WriteLine("Failed to parse JSON content.");
+        return null;
+    }
 }
 
 static async Task<List<string>> GenerateCandidatesAsync(
@@ -130,6 +139,7 @@ static async Task<List<string>> GenerateCandidatesAsync(
         PresencePenalty = 0.9f,
         FrequencyPenalty = 0.2f,
         MaxOutputTokenCount = 220,
+        ResponseFormat = ChatResponseFormat.CreateJsonObjectFormat(),
         //ReasoningEffortLevel = ChatReasoningEffortLevel.High,  //not supported by llamma model, but is supported by others like gpt-oss
 
         //ResponseFormat = ChatResponseFormat.JsonObject
@@ -155,6 +165,7 @@ static string? PickBestCandidate(IEnumerable<string> candidates, HashSet<string>
 {
     return candidates
         .Select(c => c.Trim())
+        .Where(c => !c.StartsWith("{") && !c.EndsWith("}")) // discard json results that weren’t parsed properly
         .Where(c => !string.IsNullOrWhiteSpace(c))
         .Where(c => !seen.Contains(c))
         .OrderByDescending(c => ScoreCandidate(c))
@@ -181,54 +192,82 @@ var rng = Random.Shared;
 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 if (File.Exists(outputFilePath))
 {
-    foreach (var line in File.ReadLines(outputFilePath))
+    using (var reader = new StreamReader(outputFilePath))
+    using (var csv = new CsvReader(reader, CultureInfo.InvariantCulture))
     {
-        var t = line.Trim();
-        if (!string.IsNullOrEmpty(t)) seen.Add(t);
+        var records = csv.GetRecords<PromptRecord>();
+        
+        foreach (var record in records)
+        {
+            seen.Add(record.PromptText);
+        }
     }
 }
 
-using var writer = new StreamWriter(new FileStream(outputFilePath, FileMode.Append, FileAccess.Write, FileShare.Read));
-
-for (int i = 0; i < 20; i++)
+// using var streamWriter = new File.Open(outputFilePath, FileMode.Append);
+// using var csvWriter = new CsvWriter(streamWriter, CultureInfo.InvariantCulture);
+var config = new CsvConfiguration(CultureInfo.InvariantCulture)
+    {
+        // Don't write the header again.
+        HasHeaderRecord = false,
+    };
+    
+using (var stream = File.Open(outputFilePath, FileMode.Append))
+using (var writer = new StreamWriter(stream))
+using (var csvWriter = new CsvWriter(writer, config))
 {
-    try
+
+    // Write header if file is new (empty)
+    if (new FileInfo(outputFilePath).Length == 0)
     {
-        string userPrompt = BuildUserPrompt(rng);
-
-        List<string> candidates = await GenerateCandidatesAsync(
-            client,
-            modelName,
-            systemPrompt,
-            userPrompt,
-            n: 4,                  // multiple choices per request :contentReference[oaicite:3]{index=3}
-            ct: CancellationToken.None
-        );
-
-        string? chosen = PickBestCandidate(candidates, seen);
-
-        // If all choices duplicated or low-quality, do one quick retry (keeps it simple).
-        if (string.IsNullOrWhiteSpace(chosen))
-        {
-            Console.WriteLine($"Prompt {i + 1}: all candidates low-quality or duplicates; skipping.");
-            continue;
-        }
-
-        if (string.IsNullOrWhiteSpace(chosen))
-        {
-            Console.WriteLine($"Prompt {i + 1}: got no usable candidate; skipping.");
-            continue;
-        }
-
-        await writer.WriteLineAsync(chosen);
-        await writer.FlushAsync();
-
-        seen.Add(chosen);
-        Console.WriteLine($"Prompt {i + 1} written to file.");
+        csvWriter.WriteHeader<PromptRecord>();
+        await csvWriter.NextRecordAsync();
     }
-    catch (Exception ex)
+
+    for (int i = 0; i < 10; i++)
     {
-        // Keep going rather than crashing the full batch.
-        Console.WriteLine($"Prompt {i + 1} failed: {ex.Message}");
+        try
+        {
+            string userPrompt = BuildUserPrompt(rng);
+
+            List<string> candidates = await GenerateCandidatesAsync(
+                client,
+                modelName,
+                systemPrompt,
+                userPrompt,
+                n: 4,                  // multiple choices per request :contentReference[oaicite:3]{index=3}
+                ct: CancellationToken.None
+            );
+
+            string? chosen = PickBestCandidate(candidates, seen);
+
+            // If all choices duplicated or low-quality, do one quick retry (keeps it simple).
+            if (string.IsNullOrWhiteSpace(chosen))
+            {
+                Console.WriteLine($"Prompt {i + 1}: all candidates low-quality or duplicates; skipping.");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(chosen))
+            {
+                Console.WriteLine($"Prompt {i + 1}: got no usable candidate; skipping.");
+                continue;
+            }
+
+            var record = new PromptRecord { PromptText = chosen };
+            csvWriter.WriteRecord(record);
+            csvWriter.Flush();
+            await csvWriter.NextRecordAsync();
+            await writer.FlushAsync();
+            await stream.FlushAsync();
+
+            seen.Add(chosen);
+            Console.WriteLine($"Prompt {i + 1} written to file.");
+        }
+        catch (Exception ex)
+        {
+            // Keep going rather than crashing the full batch.
+            Console.WriteLine($"Prompt {i + 1} failed: {ex.Message}");
+        }
     }
 }
