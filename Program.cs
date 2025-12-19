@@ -38,6 +38,8 @@ static string BuildSystemPrompt() =>
 """
 You generate ONE standalone creative writing prompt for authors to use as inspiration. You are an expert at crafting engaging, non-formulaic prompts that spark imagination. You are also well-read in writing craft, story structure, the classics of literature, and creative writing techniques. Draw upon this knowledge to create high-quality prompts.
 
+Output should be text only, no explanations or commentary, and no special characters apart from normal punctuation.
+
 Hard rules:
 - 1–3 concise sentences. No title. No list. No bullet points.
 - Avoid formula openings like “Write a story about…”, “Imagine…”, “In a world…”.
