@@ -13,6 +13,14 @@ var modelName = Environment.GetEnvironmentVariable("OPEN_AI_MODEL");
 var baseUrl = Environment.GetEnvironmentVariable("OPEN_AI_HOST");
 var credential = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
 var outputFilePath = Environment.GetEnvironmentVariable("OUTPUT_FILE_PATH");
+var numPromptsStr = Environment.GetEnvironmentVariable("NUM_PROMPTS");
+
+int numPrompts = 1;
+if (!string.IsNullOrWhiteSpace(numPromptsStr) && int.TryParse(numPromptsStr, out var n))
+{
+    numPrompts = n;
+}
+
 
 if (string.IsNullOrWhiteSpace(modelName))
     throw new ArgumentException("Missing OPEN_AI_MODEL environment variable.");
@@ -28,15 +36,17 @@ static string Pick(Random rng, params string[] items) => items[rng.Next(items.Le
 
 static string BuildSystemPrompt() =>
 """
-You generate ONE standalone creative writing prompt.
+You generate ONE standalone creative writing prompt for authors to use as inspiration.
 
 Hard rules:
 - 1–3 sentences. No title. No list. No bullet points.
 - Avoid formula openings like “Write a story about…”, “Imagine…”, “In a world…”.
 - Avoid clichés (chosen one, it was all a dream, ancient prophecy, waking up and it was Tuesday, etc.).
-- Prefer specific, odd concrete details (objects, textures, rules, sounds, smells).
+- Prefer specific, concrete details (objects, textures, rules, sounds, smells).
 - Include: (1) a clear situation, (2) a constraint/obstacle, (3) an emotional stake.
 - Vary genre, time period, and narrative angle across outputs.
+- Keep it fresh and non-formulaic.
+- Simple is better than complex.
 
 Output format:
 - Return valid JSON ONLY, with exactly: {"prompt":"..."}.
@@ -50,11 +60,11 @@ static string BuildUserPrompt(Random rng)
     // The entropy token helps avoid accidental caching/determinism upstream.
     string entropy = Guid.NewGuid().ToString("N");
 
-    string genre = Pick(rng, "weird literary", "cozy mystery", "speculative sci-fi", "low fantasy", "gothic", "near-future", "historical oddity", "magical realism");
-    string lens  = Pick(rng, "a confession", "a warning label", "a found transcript", "a ritual instruction", "a voicemail", "a failed performance review", "a recipe with footnotes");
-    string setting = Pick(rng, "a floodlit ferry deck at 2 a.m.", "a closed museum wing", "a salt marsh radio tower", "a motel ice machine alcove", "a town where clocks are illegal", "a greenhouse during a hailstorm");
-    string object1 = Pick(rng, "a warm coin that never cools", "a map drawn on bread", "a flute made of bone-colored glass", "a receipt that predicts tomorrow", "a key that locks doors open");
-    string object2 = Pick(rng, "a jar of unlabeled spices", "a pager that only beeps near liars", "a raincoat that smells like ozone", "a child’s sticker sheet missing one star", "a VHS tape with no images, only shadows");
+    string genre = Pick(rng, "cozy mystery", "speculative sci-fi", "low fantasy", "gothic", "near-future", "historical oddity", "magical realism");
+    //string lens  = Pick(rng, "a confession", "a warning label", "found information", "instruction", "a voicemail", "a failed performance review", "a recipe with footnotes");
+    //string setting = Pick(rng, "a floodlit ferry deck at 2 a.m.", "a closed museum wing", "a salt marsh radio tower", "a motel ice machine alcove", "a town where clocks are illegal", "a greenhouse during a hailstorm");
+    //string object1 = Pick(rng, "a warm coin that never cools", "a map drawn on bread", "a flute made of bone-colored glass", "a receipt that predicts tomorrow", "a key that locks doors open");
+    //string object2 = Pick(rng, "a jar of unlabeled spices", "a pager that only beeps near liars", "a raincoat that smells like ozone", "a child’s sticker sheet missing one star", "a VHS tape with no images, only shadows");
     string constraint = Pick(rng, "no one can speak above a whisper", "every promise becomes physically heavy", "you must finish before sunrise or forget the reason", "each lie erases a color from the world", "touching metal causes time skips");
     string stake = Pick(rng, "someone is about to leave for good", "a friendship is quietly unraveling", "a debt must be paid without money", "a missing person returns with one condition", "a community is hiding a mercy");
 
@@ -63,9 +73,6 @@ Create ONE prompt that feels fresh and non-formulaic.
 
 Ingredients (use at least 3, but DO NOT list them; weave them into the prompt naturally):
 - Genre vibe: {genre}
-- Narrative lens: {lens}
-- Setting: {setting}
-- Objects: {object1}; {object2}
 - Constraint: {constraint}
 - Emotional stake: {stake}
 
@@ -165,7 +172,7 @@ static string? PickBestCandidate(IEnumerable<string> candidates, HashSet<string>
 {
     return candidates
         .Select(c => c.Trim())
-        .Where(c => !c.StartsWith("{") && !c.EndsWith("}")) // discard json results that weren’t parsed properly
+        .Where(c => !c.Contains("{")) // discard json results that weren’t parsed properly
         .Where(c => !string.IsNullOrWhiteSpace(c))
         .Where(c => !seen.Contains(c))
         .OrderByDescending(c => ScoreCandidate(c))
@@ -224,7 +231,7 @@ using (var csvWriter = new CsvWriter(writer, config))
         await csvWriter.NextRecordAsync();
     }
 
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < numPrompts; i++)
     {
         try
         {
