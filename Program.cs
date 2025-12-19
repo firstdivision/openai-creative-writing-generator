@@ -41,7 +41,7 @@ You generate ONE standalone creative writing prompt for authors to use as inspir
 Output should be text only, no explanations or commentary, and no special characters apart from normal punctuation. Try to stay away from long, complex sentences, especially ones with emdashes or parentheses.
 
 Hard rules:
-- 1–3 concise sentences. No title. No list. No bullet points.
+- 1-3 concise sentences. No title. No list. No bullet points.
 - No carrige returns or newlines.
 - Avoid formula openings like “Write a story about…”, “Imagine…”, “In a…”.
 - Avoid clichés (chosen one, it was all a dream, ancient prophecy, waking up and it was Tuesday, etc.).
